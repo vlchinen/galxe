@@ -1,0 +1,63 @@
+import axios from 'axios';
+import { ethers } from 'ethers';
+import crypto from 'crypto';
+
+// Định nghĩa phương thức randomStringForEntropy
+const randomStringForEntropy = (length) => {
+    // Tạo ra số byte ngẫu nhiên (vì mỗi byte sẽ được chuyển thành 2 ký tự hex)
+    const byteLength = Math.ceil(length / 2);
+    return crypto.randomBytes(byteLength).toString('hex').slice(0, length);
+  };
+
+const loginGalxe = async (privateKey) => {
+  try {
+    const wallet = new ethers.Wallet(privateKey);
+    const nonce = randomStringForEntropy(96);
+    const issuedAt = new Date().toISOString();
+    const expiredAt = new Date(Date.now() + 60 * 24 * 7 * 60000).toISOString();
+
+    // Tạo message cần ký
+    const message = `app.galxe.com wants you to sign in with your Ethereum account:\n${wallet.address}\n\nSign in with Ethereum to the app.\n\nURI: https://app.galxe.com\nVersion: 1\nChain ID: 56\nNonce: ${nonce}\nIssued At: ${issuedAt}\nExpiration Time: ${expiredAt}`;
+
+    // Ký message bằng private key
+    const signature = await wallet.signMessage(message);
+
+    // Dữ liệu gửi đến API Galxe
+    const data = {
+      query: `mutation SignIn($input: Auth) { signin(input: $input) }`,
+      variables: {
+        input: {
+          address: wallet.address,
+          signature: signature,
+          message: message,
+          addressType: 'EVM',
+          publicKey: '1625',
+        },
+      },
+    };
+
+    // Gửi request đăng nhập
+    const response = await axios.post('https://graphigo.prd.galaxy.eco/query', data, {
+      headers: {
+        accept: '*/*',
+          'accept-language':
+            'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7,fr-FR;q=0.6,fr;q=0.5',
+          'content-type': 'application/json',
+          'sec-fetch-dest': 'empty',
+          'sec-fetch-mode': 'cors',
+      },
+    });
+
+    // Lấy token từ response
+    const token = response.data.data.signin;
+    console.log('✅ Token đăng nhập:', token);
+    return token;
+  } catch (err) {
+    console.error('❌ Lỗi đăng nhập:', err.response ? err.response.data : err.message);
+    return null;
+  }
+};
+
+// Thử đăng nhập (thay thế PRIVATE_KEY của bạn)
+const PRIVATE_KEY = '';
+loginGalxe(PRIVATE_KEY);
