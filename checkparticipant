@@ -1,0 +1,159 @@
+// Import axios và các thư viện cần thiết
+import axios from 'axios';
+import xlsx from 'xlsx';
+import { google } from 'googleapis';
+
+// Thông tin Google Sheets
+const CREDENTIALS_PATH = '';
+const SPREADSHEET_ID = '';
+const SHEET_RANGE = '';
+
+// Đọc file Excel
+const workbook = '';
+const sheet = workbook.Sheets['notw'];
+const data = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+
+// Hàm xác thực Google API
+async function authenticateGoogle() {
+  const auth = new google.auth.GoogleAuth({
+    keyFile: CREDENTIALS_PATH,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+  });
+  return auth.getClient();
+}
+
+// Hàm cập nhật Google Sheets
+async function updateGoogleSheet(auth, range, values) {
+  const sheets = google.sheets({ version: 'v4', auth });
+  const formattedValues = values.map(value => [value]); // Mỗi địa chỉ là một mảng con
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range,
+    valueInputOption: 'RAW',
+    resource: { values: formattedValues },
+  });
+}
+
+// Đọc danh sách ví từ file Excel và chuẩn hóa chúng
+const myWallets = {};
+for (let i = 1; i < data.length; i++) {
+  const wallet = data[i][3];
+  if (typeof wallet === 'string') {
+    const normalizedWallet = wallet.trim().toLowerCase();
+    myWallets[normalizedWallet] = true;
+  } else {
+    console.log(`Ví không hợp lệ tại hàng ${i + 1}:`, wallet);
+  }
+}
+
+// Hàm gửi yêu cầu tới API TaskOn (phân trang)
+async function fetchAllTaskOnWinners(apiUrl, id, winnerIndex, pageSize) {
+  let pageNo = 0;
+  let allWinners = [];
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const payload = {
+      id: parseInt(id, 10) || undefined,
+      winner_index: winnerIndex,
+      page: { page_no: pageNo, size: pageSize },
+    };
+
+    try {
+      const response = await axios.post(apiUrl, payload, {
+        headers: { 'Accept': 'application/json, text/plain, */*' }
+      });
+      const winners = response.data?.result?.data || [];
+      allWinners.push(...winners.map(winner => winner.user_address.toLowerCase().trim()));
+      hasNextPage = response.data?.result?.has_next_page || false; // Kiểm tra còn trang không
+      pageNo++;
+    } catch (error) {
+      console.error('Lỗi khi gửi yêu cầu API TaskOn:', error);
+      hasNextPage = false; // Dừng nếu có lỗi
+    }
+  }
+
+  return allWinners;
+}
+
+// Hàm gửi yêu cầu tới API Galaxy (phân trang)
+async function fetchAllGalaxyWinners(url, token, questId) {
+  let allWinners = [];
+  let pafter = "-1";
+
+  while (true) {
+    const payload = {
+      operationName: "campaignParticipants",
+      query: `query campaignParticipants($id: ID!, $pfirst: Int!, $pafter: String!) {
+        campaign(id: $id) {
+          participants {
+            participants(first: $pfirst, after: $pafter) {
+              list {
+                address {
+                  address
+                }
+              }
+              pageInfo {
+                endCursor
+                hasNextPage
+              }
+            }
+          }
+        }
+      }`,
+      variables: {
+        id: questId,
+        pfirst: 50,
+        pafter,
+      },
+    };
+
+    const headers = {
+      'Accept': '*/*',
+      'Authorization': token,
+      'Content-Type': 'application/json',
+    };
+
+    try {
+      const response = await axios.post(url, payload, { headers });
+      const participants = response.data?.data?.campaign?.participants?.participants?.list || [];
+      allWinners.push(...participants.map(p => p.address.address.toLowerCase().trim()));
+
+      const pageInfo = response.data?.data?.campaign?.participants?.participants?.pageInfo || {};
+      if (!pageInfo.hasNextPage) break; // Dừng nếu không còn trang
+      pafter = pageInfo.endCursor; // Chuyển sang trang tiếp theo
+    } catch (error) {
+      console.error('Lỗi khi gửi yêu cầu API Galaxy:', error);
+      break;
+    }
+  }
+
+  return allWinners;
+}
+
+// Hàm chính để xử lý logic
+async function main(id) {
+  try {
+    let winnerAddresses = [];
+    let totalParticipants = 0;
+      const url = 'https://graphigo.prd.galaxy.eco/query';
+      const token = '';
+      totalParticipants = winnerAddresses.length; // Tổng số participant
+    // So sánh với pool ví của bạn
+    const myWinningWallets = winnerAddresses.filter(wallet => myWallets[wallet]);
+    const myParticipationCount = myWinningWallets.length;
+
+    console.log(`Số lượng ví của bạn tham gia: ${myParticipationCount}/${totalParticipants}`);
+    // console.log('Danh sách ví của bạn thắng:', myWinningWallets);
+      const auth = await authenticateGoogle();
+
+      const values = myWinningWallets; // Chuyển danh sách thành mảng 2D
+      await updateGoogleSheet(auth, SHEET_RANGE, values);
+  } catch (error) {
+    console.error('Lỗi:', error);
+  }
+}
+
+// Chạy hàm chính với tham số tùy chỉnh
+const questId = process.argv[2]; // ID chiến dịch
+main(questId);
